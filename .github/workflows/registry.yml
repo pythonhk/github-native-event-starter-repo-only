@@ -1,0 +1,54 @@
+name: Registry state validation
+
+on:
+  push:
+    branches: [registry]
+  pull_request:
+    branches: [registry]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: registry / canonical-state
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the proposed registry revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate one authoritative state and derived views
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          state=registry/state.json
+          test -f "$state" && test ! -L "$state"
+          jq -e -cS . "$state" > "$RUNNER_TEMP/state.canonical"
+          cmp -s "$state" "$RUNNER_TEMP/state.canonical"
+          jq -e '
+            .schema == "pythonhk.registry-state/v2"
+            and (.event_id | type == "string")
+            and (.phase | type == "string")
+            and (.enabled | type == "boolean")
+            and (.disabled_reason | type == "string")
+            and (.revision | type == "number" and floor == . and . >= 0)
+            and (.users | type == "object")
+            and (.teams | type == "object")
+            and (.memberships | type == "object")
+            and (.attempts | type == "object")
+            and (.quotas | type == "object")
+            and (.results | type == "object")
+            and (.scoring | type == "object")
+          ' "$state" >/dev/null
+          for path in registry/*.json registry/*/*.json; do
+            [[ -f "$path" ]] || continue
+            [[ ! -L "$path" ]] || { printf 'symlink is not allowed: %s\n' "$path" >&2; exit 1; }
+            canonical="$RUNNER_TEMP/$(basename "$path").canonical"
+            jq -e -cS . "$path" > "$canonical"
+            cmp -s "$path" "$canonical" || { printf 'non-canonical JSON: %s\n' "$path" >&2; exit 1; }
+          done
+          jq -e --slurpfile s "$state" '.schema == "pythonhk.registry-users/v2" and .users == $s[0].users' registry/users/index.json >/dev/null
+          jq -e --slurpfile s "$state" '.schema == "pythonhk.registry-teams/v2" and .teams == $s[0].teams' registry/teams/index.json >/dev/null
+          jq -e --slurpfile s "$state" '.schema == "pythonhk.registry-memberships/v2" and .memberships == $s[0].memberships' registry/memberships/index.json >/dev/null
+          jq -e --slurpfile s "$state" '.schema == "pythonhk.registry-submissions/v2" and .attempts == $s[0].attempts' registry/submissions/index.json >/dev/null
