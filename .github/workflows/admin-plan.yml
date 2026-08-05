@@ -1,0 +1,38 @@
+name: Organizer state plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Prepare a reviewed registry PR; this workflow never merges it
+        required: true
+        type: choice
+        options: [activate-team, reserve-submission]
+      request_path:
+        description: Path to the merged request on main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: organizer / state-plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: organizer-administration
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Explain organizer merge boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n '${{ inputs.request_path }}'
+          printf '%s\n' 'Plan generated from trusted main.'
+          printf '%s\n' 'No registry write was performed.'
+          printf '%s\n' 'Review and merge an admin/* PR against registry.'
