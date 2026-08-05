@@ -1,0 +1,33 @@
+{
+  "schema": "pythonhk.team-proposal/v2",
+  "event_id": "demo-event-2026",
+  "repository_id": "123456789",
+  "registration_id": "11111111-1111-4111-8111-111111111111",
+  "team_id": "22222222-2222-4222-8222-222222222222",
+  "proposer_github_id": "101",
+  "members": [
+    {"github_id": "101", "key_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "public_key": "PUB101", "role": "captain"},
+    {"github_id": "102", "key_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "public_key": "PUB102", "role": "member"},
+    {"github_id": "103", "key_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "public_key": "PUB103", "role": "member"}
+  ],
+  "eventctl_proposal": {
+    "kind": "team_proposal",
+    "protocol": "pythonhk.github-native-event",
+    "protocol_version": 1,
+    "event_id": "demo-event-2026",
+    "event_epoch": "1",
+    "operation_id": "11111111-1111-4111-8111-111111111111",
+    "team_id": "22222222-2222-4222-8222-222222222222",
+    "proposer_actor_id": "101",
+    "key_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "key_epoch": "1",
+    "member_actor_ids": ["101", "102", "103"],
+    "base_repository": {"id": "123456789", "name": "demo-event-2026", "owner": "pythonhk"},
+    "config_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "issued_at": "2026-08-05T00:00:00Z",
+    "expires_at": "2026-08-12T00:00:00Z",
+    "signature": {"algorithm": "Ed25519", "key_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "value": "PLACEHOLDER"}
+  },
+  "issued_at": "2026-08-05T00:00:00Z",
+  "expires_at": "2026-08-12T00:00:00Z"
+}
