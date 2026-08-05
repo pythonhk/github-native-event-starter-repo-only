@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+if [[ -n "${EVENTCTL_BIN:-}" ]]; then
+	exec "$EVENTCTL_BIN" "$@"
+fi
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+platform=$(uname -s | tr '[:upper:]' '[:lower:]')
+architecture=$(uname -m)
+if [[ "$platform" == darwin && "$architecture" == arm64 && -x "$SCRIPT_DIR/.cache/eventctl_darwin_arm64" ]]; then
+	exec "$SCRIPT_DIR/.cache/eventctl_darwin_arm64" "$@"
+fi
+if [[ "$platform" == darwin && "$architecture" == x86_64 && -x "$SCRIPT_DIR/.cache/eventctl_darwin_amd64" ]]; then
+	exec "$SCRIPT_DIR/.cache/eventctl_darwin_amd64" "$@"
+fi
+printf '%s\n' 'eventctl is not installed; run the documented verified release installer or set EVENTCTL_BIN' >&2
+exit 127
