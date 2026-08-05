@@ -1,0 +1,47 @@
+name: Participant registration validation
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: registration / actor-binding
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted base workflow
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Validate exact registration request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          . scripts/lib/common.sh
+          event_require_no_secrets_for_pr
+          paths="$RUNNER_TEMP/changed-paths"
+          event_changed_paths "$EVENT_REPOSITORY" "$EVENT_PR_NUMBER" "$paths"
+          count=$(wc -l < "$paths" | tr -d ' ')
+          [[ "$count" == 1 ]] || event_die "registration PR must change exactly one file, got $count"
+          request_path=$(grep -E '^requests/users/[1-9][0-9]{0,19}\.json$' "$paths" || true)
+          [[ -n "$request_path" ]] || event_die 'registration request path is invalid'
+          path_actor=${request_path#requests/users/}
+          path_actor=${path_actor%.json}
+          [[ "$path_actor" == "$EVENT_AUTHOR_ID" ]] || event_die 'registration filename must equal authenticated actor ID'
+          event_fetch_pr_blob "$EVENT_REPOSITORY" "$EVENT_HEAD_SHA" "$request_path" "$RUNNER_TEMP/registration.json"
+          bash scripts/actions/registration.sh \
+            --request "$RUNNER_TEMP/registration.json" \
+            --actual-author "$EVENT_AUTHOR_ID"
