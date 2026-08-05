@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pythonhk.org/event/protocol/v2/registration-request.schema.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["kind", "actor_id", "key_id", "key_epoch", "event_id", "base_repository", "participant_key", "signature"],
+  "properties": {
+    "kind": {"const": "registration_request"},
+    "actor_id": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
+    "key_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "key_epoch": {"type": "string", "pattern": "^[1-9][0-9]{0,9}$"},
+    "event_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
+    "base_repository": {"type": "object", "required": ["id"]},
+    "participant_key": {"type": "object", "required": ["key_id", "public_key"]},
+    "signature": {"type": "object", "required": ["key_id"]}
+  }
+}
