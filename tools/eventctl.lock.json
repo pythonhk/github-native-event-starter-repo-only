@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "repository": "pythonhk/eventctl",
+  "version": "1.0.0",
+  "checksums": {
+    "name": "SHA256SUMS",
+    "sha256": "135f107b568fd24da8a5d52cdcb892d8b75f54ccd5a105008d31dc419785e58e"
+  },
+  "assets": {
+    "darwin-arm64": {
+      "archive": "tar.gz",
+      "name": "eventctl_1.0.0_darwin_arm64.tar.gz",
+      "sha256": "57de47ffe812e0e560a32680f4fdcddbd00c8e0fc3f74e7f1581a901b5881a2a",
+      "binary_sha256": "ab759bb00f10c156a2c8ba246facfc1c78a2e0c37eb311be702cd1691dac9418"
+    },
+    "darwin-amd64": {
+      "archive": "tar.gz",
+      "name": "eventctl_1.0.0_darwin_amd64.tar.gz",
+      "sha256": "a48a397a91713b1d8f9e48d283c12a96fcb0f29198ea9cb12cb90664aea2ea82",
+      "binary_sha256": "9de94e6e587bbb92b7693083a0029f2332f72e7cbd6c3f66b31ef0527c9b5cac"
+    },
+    "linux-amd64": {
+      "archive": "tar.gz",
+      "name": "eventctl_1.0.0_linux_amd64.tar.gz",
+      "sha256": "3fa7d8fc7a69a757744552bc9059baf3c5336bce80778c59ac318106e3dfaf99",
+      "binary_sha256": "ff64751129656cd8c14d1a2a9789434d9a28760432927d3126ac19471d449d3b"
+    },
+    "linux-arm64": {
+      "archive": "tar.gz",
+      "name": "eventctl_1.0.0_linux_arm64.tar.gz",
+      "sha256": "da8eefd0faa8f1aacb07bf2d1effedc617cfd6bed8acaa1324ab29a262eec5ea",
+      "binary_sha256": "bace9c88f1af782a02d737213c961c5d67adb5ecf3990ef126304658c5fcd3d2"
+    },
+    "windows-amd64": {
+      "archive": "zip",
+      "name": "eventctl_1.0.0_windows_amd64.zip",
+      "sha256": "acb948b755d10a2e5289a63114ab11abe743015aa773b92894978c0c6f9cbe14",
+      "binary_sha256": "0eb4f15cf058cba9591608393131d1c4ac808f43a6d9c87d9da2348cfd6d07b5"
+    },
+    "windows-arm64": {
+      "archive": "zip",
+      "name": "eventctl_1.0.0_windows_arm64.zip",
+      "sha256": "e38113e64f7c9f33ee020dce6f3c6b141d4c8102a92d6800241617df90a09275",
+      "binary_sha256": "4ff2b62b55eec96ec6dc267efd8878817ded6fe86913e76f09c9780029b03bd0"
+    }
+  }
+}
