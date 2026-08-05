@@ -1,0 +1,47 @@
+name: Isolated scoring hook
+
+on:
+  workflow_dispatch:
+    inputs:
+      attempt_id:
+        description: Reserved attempt to score
+        required: true
+        type: string
+      result_path:
+        description: Organizer-provided result envelope path
+        required: true
+        type: string
+      payload_path:
+        description: Organizer-provided public result payload path
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: scoring / isolated-result-check
+    if: github.ref == 'refs/heads/registry'
+    runs-on: ubuntu-24.04
+    environment: scoring
+    steps:
+      - name: Check out trusted registry
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: registry
+          persist-credentials: false
+      - name: Validate organizer result without participant execution
+        shell: bash
+        env:
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+          RESULT_PATH: ${{ inputs.result_path }}
+          PAYLOAD_PATH: ${{ inputs.payload_path }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$ATTEMPT_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          [[ "$RESULT_PATH" =~ ^registry/scoring/[A-Za-z0-9._-]+\.result\.json$ ]] || { printf '%s\n' 'result path is invalid'; exit 1; }
+          [[ "$PAYLOAD_PATH" =~ ^registry/scoring/[A-Za-z0-9._-]+\.payload\.json$ ]] || { printf '%s\n' 'payload path is invalid'; exit 1; }
+          test -f "$RESULT_PATH"
+          test -f "$PAYLOAD_PATH"
+          scripts/scoring/validate-result.sh --state registry/state.json --result "$RESULT_PATH" --payload "$PAYLOAD_PATH"
