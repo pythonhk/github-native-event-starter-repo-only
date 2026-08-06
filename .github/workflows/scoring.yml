@@ -44,4 +44,4 @@ jobs:
           [[ "$PAYLOAD_PATH" =~ ^registry/scoring/[A-Za-z0-9._-]+\.payload\.json$ ]] || { printf '%s\n' 'payload path is invalid'; exit 1; }
           test -f "$RESULT_PATH"
           test -f "$PAYLOAD_PATH"
-          scripts/scoring/validate-result.sh --state registry/state.json --result "$RESULT_PATH" --payload "$PAYLOAD_PATH"
+          bash scripts/scoring/validate-result.sh --state registry/state.json --result "$RESULT_PATH" --payload "$PAYLOAD_PATH"
