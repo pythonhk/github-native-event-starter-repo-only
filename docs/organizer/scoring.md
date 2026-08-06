@@ -15,7 +15,7 @@ The result must bind:
 Run the read-only hook with the protected `registry` checkout:
 
 ```text
-scripts/scoring/validate-result.sh \
+bash scripts/scoring/validate-result.sh \
   --state registry/state.json \
   --result registry/scoring/<attempt-id>.result.json \
   --payload registry/scoring/<attempt-id>.payload.json
