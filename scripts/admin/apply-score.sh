@@ -35,7 +35,7 @@ event_assert_canonical_json "$result"
 phase=$(jq -er '.phase' "$state")
 [[ "$phase" == 'submissions_open' || "$phase" == 'frozen' || "$phase" == 'closed' ]] || event_die "scoring is not allowed in lifecycle phase $phase"
 jq -e '.scoring.enabled == true and .scoring.isolation == "organizer-controlled"' "$state" >/dev/null || event_die 'isolated scoring is disabled'
-"$SCRIPT_DIR/../scoring/validate-result.sh" --state "$state" --result "$result" --payload "$payload" >/dev/null
+bash "$SCRIPT_DIR/../scoring/validate-result.sh" --state "$state" --result "$result" --payload "$payload" >/dev/null
 attempt_id=$(jq -er '.attempt_id' "$result")
 revision=$(jq -er '.revision' "$state")
 new_revision=$((revision + 1))
