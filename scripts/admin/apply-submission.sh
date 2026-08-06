@@ -147,7 +147,7 @@ if [[ -n "$bundle" ]]; then
 	action_args+=(--bundle "$bundle")
 fi
 action_args+=(--actual-pr "$actual_pr" --actual-pr-id "$actual_pr_id" --actual-fork-repository-id "$actual_fork" --actual-head-owner "$actual_owner" --actual-head-branch "$actual_branch" --actual-head-sha "$actual_sha")
-"$SCRIPT_DIR/../actions/submission.sh" "${action_args[@]}" >/dev/null
+bash "$SCRIPT_DIR/../actions/submission.sh" "${action_args[@]}" >/dev/null
 
 if [[ "$plan_only" == false ]]; then
 	event_require_file 'eventctl binary' "$eventctl"
