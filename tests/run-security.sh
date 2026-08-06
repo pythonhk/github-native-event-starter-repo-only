@@ -28,7 +28,7 @@ expect_contains() {
 event_require_command jq
 event_require_command bash
 bash -n "$ROOT"/scripts/lib/common.sh "$ROOT"/scripts/actions/*.sh "$ROOT"/scripts/admin/*.sh "$ROOT"/scripts/participant/*.sh "$ROOT"/tools/install-eventctl.sh
-"$ROOT/tools/verify-eventctl-lock.sh" >/dev/null
+bash "$ROOT/tools/verify-eventctl-lock.sh" >/dev/null
 for schema in "$ROOT"/protocol/schemas/v2/*.json; do
   jq -e . "$schema" >/dev/null
 done
