@@ -59,7 +59,7 @@ event_assert_canonical_json "$state"
 event_assert_canonical_json "$identity_registry"
 event_assert_canonical_json "$request"
 
-"$SCRIPT_DIR/../actions/registration.sh" --request "$request" --actual-author "$actual_author" >/dev/null
+bash "$SCRIPT_DIR/../actions/registration.sh" --request "$request" --actual-author "$actual_author" >/dev/null
 phase=$(jq -er '.phase' "$state")
 enabled=$(jq -er '.enabled' "$state")
 [[ "$phase" == 'registration_open' || "$phase" == 'formation_open' ]] || event_die "registration is not open in phase $phase"
