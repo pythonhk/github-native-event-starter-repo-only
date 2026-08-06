@@ -120,7 +120,7 @@ GitHub pull-request event, not the raw GitHub event payload. Prepare it before
 the admin plan and retain it with the review evidence:
 
 ```text
-scripts/admin/prepare-pr-metadata.sh \
+bash scripts/admin/prepare-pr-metadata.sh \
   --github-event /secure/evidence/github-event.json \
   --out /secure/evidence/pr-metadata.json
 ```
