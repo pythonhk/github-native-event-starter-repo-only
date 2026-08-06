@@ -129,7 +129,7 @@ jq -e '
   and (.attempts | type == "object")
 ' "$state" >/dev/null || event_die 'registry state failed strict structural validation'
 
-"$SCRIPT_DIR/../actions/team-proposal.sh" --proposal "$proposal" --signatures "$signatures" >/dev/null
+bash "$SCRIPT_DIR/../actions/team-proposal.sh" --proposal "$proposal" --signatures "$signatures" >/dev/null
 
 phase=$(jq -er '.phase' "$state")
 enabled=$(jq -er '.enabled' "$state")
@@ -150,7 +150,7 @@ proof_digests='{}'
 for member_id in $(jq -er '.members[].github_id' "$proposal"); do
   proof_file="$proof_dir/${member_id}.json"
   event_require_file "key proof for $member_id" "$proof_file"
-  "$SCRIPT_DIR/../actions/team-proof.sh" --proposal "$proposal" --proof "$proof_file" --actual-author "$member_id" >/dev/null
+  bash "$SCRIPT_DIR/../actions/team-proof.sh" --proposal "$proposal" --proof "$proof_file" --actual-author "$member_id" >/dev/null
   proof_digest=$(event_json_digest "$proof_file")
   proof_digests=$(jq -c --arg id "$member_id" --arg digest "$proof_digest" '. + {($id):$digest}' <<< "$proof_digests")
 done
