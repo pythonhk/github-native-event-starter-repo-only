@@ -273,8 +273,14 @@ def _git_server(checkout: Path, tmp_path: Path):
     base_sha = _run_git(checkout, "rev-parse", "HEAD").stdout.strip()
     for branch in ("main", "registry"):
         subprocess.run(
-            ["git", "push", str(remote), f"{base_sha}:refs/heads/{branch}"],
-            cwd=checkout,
+            [
+                "git",
+                "-C",
+                str(remote),
+                "fetch",
+                str(checkout),
+                f"{base_sha}:refs/heads/{branch}",
+            ],
             check=True,
             capture_output=True,
         )
