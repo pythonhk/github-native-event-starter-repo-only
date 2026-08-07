@@ -41,16 +41,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           cache="$HOME/.cache/act/actions-checkout.git"
-          if [[ ! -d "$cache" ]]; then
-            mkdir -p "$(dirname "$cache")"
-            # The pytest fixture clones this repository locally to serve the
-            # pinned action to act. A partial clone can omit promisor blobs
-            # from that local transfer, so keep this small action repository
-            # complete even though it remains shallow.
-            git clone --depth=1 --no-checkout \
-              https://github.com/actions/checkout.git "$cache"
-          fi
-          git -C "$cache" fetch --no-filter --depth=1 origin "$CHECKOUT_ACTION_SHA"
+          rm -rf "$cache"
+          mkdir -p "$(dirname "$cache")"
+          # The pytest fixture clones this repository locally to serve the
+          # pinned action to act. Use a fresh complete shallow bare repository
+          # so no promisor or stale objects can leak into that local transfer.
+          git init --bare "$cache"
+          git -C "$cache" remote add origin https://github.com/actions/checkout.git
+          git -C "$cache" fetch --no-filter --depth=1 origin \
+            "$CHECKOUT_ACTION_SHA:refs/heads/pinned"
 
       - name: Run the act-backed E2E suite
         env:
