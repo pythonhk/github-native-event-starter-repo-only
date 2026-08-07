@@ -43,7 +43,11 @@ jobs:
           cache="$HOME/.cache/act/actions-checkout.git"
           if [[ ! -d "$cache" ]]; then
             mkdir -p "$(dirname "$cache")"
-            git clone --filter=blob:none --no-checkout \
+            # The pytest fixture clones this repository locally to serve the
+            # pinned action to act. A partial clone can omit promisor blobs
+            # from that local transfer, so keep this small action repository
+            # complete even though it remains shallow.
+            git clone --depth=1 --no-checkout \
               https://github.com/actions/checkout.git "$cache"
           fi
           git -C "$cache" fetch --depth=1 origin "$CHECKOUT_ACTION_SHA"
