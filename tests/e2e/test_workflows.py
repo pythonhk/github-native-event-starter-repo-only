@@ -287,6 +287,11 @@ def _git_server(checkout: Path, tmp_path: Path):
             check=True,
             capture_output=True,
         )
+    subprocess.run(
+        ["git", "-C", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
 
     server_port = 0
 
