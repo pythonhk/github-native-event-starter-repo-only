@@ -202,6 +202,7 @@ def _act(
         "--container-daemon-socket=-",
         "--container-options",
         (
+            "--add-host=host.docker.internal:host-gateway "
             f"-v {checkout / 'tests/e2e/bin/gh'}:/usr/local/bin/gh:ro "
             f"-v {checkout / '.act-e2e'}:/tmp/gh-mock:ro"
         ),
