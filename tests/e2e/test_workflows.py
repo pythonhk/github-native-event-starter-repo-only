@@ -215,6 +215,8 @@ def _act(
         f"GITHUB_SERVER_URL={server_url}",
         "--env",
         f"PATH={ACT_PATH}",
+        "--secret",
+        "GITHUB_TOKEN=act-e2e-token",
         "--rm",
         event_name,
     ]
@@ -347,7 +349,7 @@ def _git_server(checkout: Path, tmp_path: Path):
             del format, args
 
     server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), GitHttpHandler)
-    server_port = int(getattr(server, "server_port"))
+    server_port = int(server.server_port)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -438,9 +440,9 @@ def test_team_proposal_workflow_is_the_system_under_test(
             action_path,
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "PENDING_KEY_PROOFS" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -501,9 +503,9 @@ def test_team_proposal_workflow_reaches_ready_after_all_consents(
             action_path,
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "READY_TO_ACTIVATE" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -590,9 +592,9 @@ def test_team_proof_workflow_accepts_actor_bound_proof(
             action_path,
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "key proof structurally valid and actor-bound" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -637,9 +639,9 @@ def test_registration_workflow_accepts_actor_bound_request(
             action_path,
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "registration request structurally valid and actor-bound" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -704,9 +706,9 @@ def test_submission_workflow_accepts_arranged_bundle_without_mutating_registry(
             action_path,
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "submission request structurally valid" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -734,9 +736,9 @@ def test_registry_workflow_validates_registry_branch(
             event_name="push",
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "registry / canonical-state" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -821,9 +823,9 @@ def test_scoring_workflow_validates_arranged_result(
             event_name="workflow_dispatch",
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "scoring / isolated-result-check" in result.stdout
     _assert_no_git_mutation(act_checkout, before)
 
@@ -855,8 +857,8 @@ def test_organizer_plan_workflow_does_not_write_registry(
             event_name="workflow_dispatch",
         )
 
-    assert (
-        result.returncode == 0
-    ), f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "No registry write was performed." in result.stdout
     _assert_no_git_mutation(act_checkout, before)
