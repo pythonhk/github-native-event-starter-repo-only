@@ -111,8 +111,40 @@ assumed observable.
 
 Normal organizer activation is cryptographic: `scripts/admin/activate-team.sh`
 requires the pinned `eventctl` binary, protected trust files, and a source-time
-map for the proof PRs. Its explicit `--plan-only` mode exists only for local
-hostile-input tests and says that cryptographic verification was not run.
+map for the proof PRs. Its explicit `--plan-only` mode is a structural review
+mode and says that cryptographic verification was not run.
+
+The shell files under `scripts/` are trusted runtime adapters, not the test
+harness. GitHub Actions invokes them from the checked-in base revision, and the
+act-backed pytest suite exercises them through the checked-in workflow YAML.
+Keeping the validation and state transitions outside YAML avoids duplicating
+security logic inside workflow files and lets an organizer reproduce a check
+before merging.
+
+All pytest cases are Docker-backed `act` black-box tests. Run them locally with:
+
+```bash
+mise run test
+```
+
+The task requires Docker, the `act` binary, and its cached checkout action. The
+underlying command is:
+
+```bash
+uv run --python 3.12 --with pytest==8.3.5 --no-project pytest -q tests/e2e
+```
+The hosted CI workflow runs this same act-backed suite as its only required
+status check. It does not maintain a parallel unit-test, static-shape, or
+shell-contract test path.
+
+Here pytest is the outer coordinator. Each case arranges an isolated pull
+request event, API responses, and (for submissions) producer output; `act`
+then runs the checked-in workflow YAML in a Docker runner. Pytest asserts the
+workflow exit/log contract and the Git working-tree contract afterward. The
+current participant workflows are intentionally read-only, so their positive
+cases assert that no registry or request history was mutated. A future
+organizer state-transition workflow can reuse the same fixture boundary and
+assert the expected registry commit and canonical state instead.
 
 ## Layout
 
@@ -125,7 +157,7 @@ registry/                 normalized authoritative state on registry
 scripts/participant/      request preparation helpers
 scripts/actions/          untrusted-data validators
 scripts/admin/            organizer-only plan/apply/view-rebuild helpers
-tests/                    hostile-input and state-model tests
+tests/                    pytest-coordinated workflow black-box tests
 ```
 
 Read [docs/organizer/workflow.md](docs/organizer/workflow.md) before creating a

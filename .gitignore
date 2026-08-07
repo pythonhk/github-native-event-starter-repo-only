@@ -7,3 +7,5 @@ tools/.cache/
 *.pem
 *.private.json
 registry/.working/
+.pytest_cache/
+__pycache__/

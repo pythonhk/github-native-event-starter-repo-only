@@ -15,8 +15,7 @@
       "required_review_thread_resolution": true
     },
     "required_status_checks": [
-      "event / request-shape",
-      "event / hostile-inputs"
+      "event / act-e2e"
     ]
   },
   "bypass_actors": []
