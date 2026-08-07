@@ -50,7 +50,7 @@ jobs:
             git clone --depth=1 --no-checkout \
               https://github.com/actions/checkout.git "$cache"
           fi
-          git -C "$cache" fetch --depth=1 origin "$CHECKOUT_ACTION_SHA"
+          git -C "$cache" fetch --no-filter --depth=1 origin "$CHECKOUT_ACTION_SHA"
 
       - name: Run the act-backed E2E suite
         env:
