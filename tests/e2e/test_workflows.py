@@ -274,15 +274,23 @@ def _git_server(checkout: Path, tmp_path: Path):
     )
     _run_git(checkout, "commit", "-m", "act e2e fixture")
     base_sha = _run_git(checkout, "rev-parse", "HEAD").stdout.strip()
+    # A hosted checkout is shallow, so Git refuses to update a bare ref
+    # directly from that source. Transfer the object first, then install both
+    # fixture refs explicitly.
+    subprocess.run(
+        ["git", "-C", str(remote), "fetch", str(checkout), base_sha],
+        check=True,
+        capture_output=True,
+    )
     for branch in ("main", "registry"):
         subprocess.run(
             [
                 "git",
                 "-C",
                 str(remote),
-                "fetch",
-                str(checkout),
-                f"{base_sha}:refs/heads/{branch}",
+                "update-ref",
+                f"refs/heads/{branch}",
+                base_sha,
             ],
             check=True,
             capture_output=True,
