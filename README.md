@@ -28,9 +28,10 @@ itself. The organizer is trusted to review a normal `admin/*` pull request to
 4. Run `eventctl doctor --event event/binding.json` and copy its complete
    `result.event` object into `registry/state.json.event`. Leave the registry
    in `draft`, disabled, with `bootstrap_required` until the event is ready.
-5. After the reviewed `eventctl/v2` release exists, replace the `UNRELEASED`
-   value in `tools/eventctl.lock.json` with its Linux release asset and both
-   SHA-256 values. The trusted workflows download and verify that exact binary.
+5. After the reviewed `eventctl/v2` release exists, replace `UNRELEASED` in
+   `tools/eventctl.lock.json` with every release archive and binary SHA-256
+   value. Trusted workflows and the E2E suite download and verify only the
+   platform-specific asset they need.
 6. Review the bootstrap PR, create the protected branches, then set the
    registry phase to `registration_open` and enable it through an organizer PR.
 
@@ -160,7 +161,8 @@ mise run test
 
 Pytest coordinates `act`, Docker, a deterministic GitHub API fixture, and the
 real `eventctl` executable against the checked-in workflow YAML. It never runs
-participant fork code. Before `eventctl/v2` is pinned in the lock file, local
-development supplies `EVENTCTL_E2E_NATIVE_BIN` for the host executable that
-creates requests and `EVENTCTL_E2E_BIN` for the matching Linux executable that
-`act` runs. A published event never uses either test-only override.
+participant fork code. Once the release is pinned, a clean clone downloads and
+verifies the exact host and `act` binaries automatically. Before the first pin,
+local development supplies `EVENTCTL_E2E_NATIVE_BIN` for the host executable
+and `EVENTCTL_E2E_BIN` for the matching Linux executable that `act` runs. A
+published event never uses either test-only override.

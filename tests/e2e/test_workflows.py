@@ -7,6 +7,7 @@ import os
 import platform
 import shutil
 import subprocess
+import tarfile
 import threading
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 import pytest
 
@@ -139,12 +141,70 @@ def _required_binary(name: str) -> Path:
     return path
 
 
-@pytest.fixture(scope="session")
-def eventctl() -> Eventctl:
+def _configured_eventctl() -> Eventctl | None:
+    native = os.environ.get("EVENTCTL_E2E_NATIVE_BIN")
+    linux = os.environ.get("EVENTCTL_E2E_BIN")
+    if not native and not linux:
+        return None
     return Eventctl(
         native=_required_binary("EVENTCTL_E2E_NATIVE_BIN"),
         linux=_required_binary("EVENTCTL_E2E_BIN"),
     )
+
+
+def _asset_key(system: str, machine: str) -> str:
+    systems = {"Darwin": "darwin", "Linux": "linux"}
+    machines = {
+        "x86_64": "amd64",
+        "AMD64": "amd64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }
+    return f"{systems[system]}-{machines[machine]}"
+
+
+def _download_eventctl(repo_root: Path, destination: Path, asset_key: str) -> Path:
+    lock = _read_json(repo_root / "tools" / "eventctl.lock.json")
+    version = lock["version"]
+    if version == "UNRELEASED":
+        pytest.fail(
+            "eventctl is not pinned; set both EVENTCTL_E2E_NATIVE_BIN and EVENTCTL_E2E_BIN"
+        )
+    asset = lock["assets"][asset_key]
+    archive = destination / asset["name"]
+    binary = destination / "eventctl"
+    destination.mkdir()
+    with urlopen(
+        f"https://github.com/{lock['repository']}/releases/download/v{version}/{asset['name']}",
+        timeout=60,
+    ) as response:
+        archive.write_bytes(response.read())
+    assert hashlib.sha256(archive.read_bytes()).hexdigest() == asset["archive_sha256"]
+    with tarfile.open(archive, "r:gz") as contents:
+        member = contents.getmember("eventctl")
+        assert member.isfile()
+        source = contents.extractfile(member)
+        assert source is not None
+        binary.write_bytes(source.read())
+    binary.chmod(binary.stat().st_mode | 0o111)
+    assert hashlib.sha256(binary.read_bytes()).hexdigest() == asset["binary_sha256"]
+    return binary
+
+
+@pytest.fixture(scope="session")
+def eventctl(repo_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Eventctl:
+    configured = _configured_eventctl()
+    if configured:
+        return configured
+    root = tmp_path_factory.mktemp("eventctl")
+    native_key = _asset_key(platform.system(), platform.machine())
+    _, _, linux_machine = ACT_CONTAINER_ARCH.partition("/")
+    linux_key = _asset_key("Linux", linux_machine)
+    binaries = {
+        key: _download_eventctl(repo_root, root / key, key)
+        for key in {native_key, linux_key}
+    }
+    return Eventctl(native=binaries[native_key], linux=binaries[linux_key])
 
 
 def _event(*, author_id: int, created_at: str) -> dict[str, Any]:
