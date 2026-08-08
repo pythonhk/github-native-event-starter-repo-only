@@ -1,5 +1,4 @@
 * @pythonhk/event-organizers
 /.github/ @pythonhk/event-organizers
-/protocol/ @pythonhk/event-organizers
-/scripts/ @pythonhk/event-organizers
+/event/ @pythonhk/event-organizers
 /registry/ @pythonhk/event-organizers

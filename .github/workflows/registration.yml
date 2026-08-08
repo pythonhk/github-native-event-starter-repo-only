@@ -3,6 +3,8 @@ name: Participant registration validation
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    paths:
+      - 'requests/users/*.json'
 
 permissions:
   contents: read
@@ -20,28 +22,41 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - name: Validate exact registration request
+
+      - id: eventctl
+        name: Resolve pinned eventctl
+        uses: ./.github/actions/eventctl
+        with:
+          test-bin: ${{ env.EVENTCTL_E2E_BIN }}
+
+      - name: Verify the event-bound registration
         env:
+          EVENTCTL: ${{ steps.eventctl.outputs.path }}
           GH_TOKEN: ${{ github.token }}
           EVENT_REPOSITORY: ${{ github.repository }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+          EVENT_SOURCE_TIME: ${{ github.event.pull_request.created_at }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          . scripts/lib/common.sh
-          event_require_no_secrets_for_pr
           paths="$RUNNER_TEMP/changed-paths"
-          event_changed_paths "$EVENT_REPOSITORY" "$EVENT_PR_NUMBER" "$paths"
-          count=$(wc -l < "$paths" | tr -d ' ')
-          [[ "$count" == 1 ]] || event_die "registration PR must change exactly one file, got $count"
-          request_path=$(grep -E '^requests/users/[1-9][0-9]{0,19}\.json$' "$paths" || true)
-          [[ -n "$request_path" ]] || event_die 'registration request path is invalid'
-          path_actor=${request_path#requests/users/}
-          path_actor=${path_actor%.json}
-          [[ "$path_actor" == "$EVENT_AUTHOR_ID" ]] || event_die 'registration filename must equal authenticated actor ID'
-          event_fetch_pr_blob "$EVENT_REPOSITORY" "$EVENT_HEAD_SHA" "$request_path" "$RUNNER_TEMP/registration.json"
-          bash scripts/actions/registration.sh \
-            --request "$RUNNER_TEMP/registration.json" \
-            --actual-author "$EVENT_AUTHOR_ID"
+          gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${EVENT_REPOSITORY}/pulls/${EVENT_PR_NUMBER}/files?per_page=100" \
+            --jq '.[].filename' > "$paths"
+          test "$(wc -l < "$paths" | tr -d ' ')" = 1
+          request_path=$(cat "$paths")
+          [[ "$request_path" =~ ^requests/users/([1-9][0-9]{0,19})\.json$ ]]
+          test "${BASH_REMATCH[1]}" = "$EVENT_AUTHOR_ID"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${EVENT_REPOSITORY}/contents/${request_path}?ref=${EVENT_HEAD_SHA}" \
+            > "$RUNNER_TEMP/request.json"
+          "$EVENTCTL" identity verify \
+            --event event/binding.json \
+            --input "$RUNNER_TEMP/request.json" \
+            --expect-actor-id "$EVENT_AUTHOR_ID" \
+            --source-time "$EVENT_SOURCE_TIME" \
+            --output "$RUNNER_TEMP/verified-identity.json"
+          printf '%s\n' 'registration request is signed, event-bound, and actor-bound'
