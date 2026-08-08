@@ -1,133 +1,168 @@
-# GitHub-native event starter — organizer-trusted PR model
+# GitHub-native event starter
 
-This is the repository-only successor to the App-centric v1 starter. It is a
-public, reusable GitHub template for bounded events where the organizer is the
-trusted state-transition authority.
-
-The default operating model has two branch roles:
+This is the small, clone-based starter for a PythonHK event. It uses the
+released `eventctl/v2` CLI and ordinary protected GitHub branches; it has no
+GitHub App, PEM, application token, database, or server.
 
 ```text
-main
-├── trusted workflows, schemas, and event documentation
-├── merged participant request history
-└── no participant-controlled workflow changes
-
-registry
-└── protected normalized public state
-    users, teams, memberships, attempts, quotas, results, and scoring policy
+main     event policy, trusted workflows, and merged participant requests
+registry organizer-reviewed identities, active teams, and accepted attempts
 ```
 
-Participants push to a branch in their own fork and open pull requests to the
-upstream event repository's `main` branch. Team proposals, member proofs, and
-submissions are all request files; they do not write authoritative state.
-An organizer reviews accepted requests and merges one atomic activation or
-state-update PR into `registry`.
+A participant request is public and never changes authoritative state by
+itself. The organizer is trusted to review a normal `admin/*` pull request to
+`registry` after cryptographic verification succeeds.
 
-There is no custom event-specific GitHub App in the normal runtime path. GitHub
-Actions performs read-only validation with `pull_request_target`, using only
-trusted base-branch code and exact API-fetched blobs. It never checks out or
-executes fork code and never receives organizer secrets.
+## Create an event
 
-The pinned `eventctl` v1 trust documents still contain a logical writer/state
-label for protocol compatibility. In this starter those fields are
-organizer-control labels only; the outer repository's authoritative state is
-the reviewed `registry` branch, and no GitHub App installation, App token, or
-App private key is required.
+1. Create a new repository from this template. Do not make the template's
+   repository ID part of the event identity.
+2. Create and protect a `registry` branch from the same reviewed commit.
+   Require an organizer review, linear history, no force pushes or deletion,
+   and the `registry / canonical-state` check. Protect `main` the same way and
+   require `event / act-e2e`.
+3. Replace `event/terms.md` and update `event/binding.json` together: choose
+   the event ID, numeric GitHub repository ID, validity window, request TTLs,
+   and team/attempt limits. Set `terms_sha256` to the SHA-256 of the exact
+   terms file.
+4. Run `eventctl doctor --event event/binding.json` and copy its complete
+   `result.event` object into `registry/state.json.event`. Leave the registry
+   in `draft`, disabled, with `bootstrap_required` until the event is ready.
+5. After the reviewed `eventctl/v2` release exists, copy its
+   `eventctl.lock.json` release asset to `tools/eventctl.lock.json`. Trusted
+   workflows and the E2E suite download and verify only the platform-specific
+   asset they need.
+6. Review the bootstrap PR, create the protected branches, then set the
+   registry phase to `registration_open` and enable it through an organizer PR.
 
-## Team formation
+`registry/state.json` is the only authoritative state document. Its event
+reference, phase, active identities, teams, and attempts are checked by
+`eventctl doctor`; it intentionally has no derived identity or membership
+views to keep in sync.
 
-Participants first register an Ed25519 identity through an exact
-`requests/users/<github-id>.json` PR. See
-[docs/participant/registration.md](docs/participant/registration.md).
-Install the shared, checksum-pinned Go CLI once with
-[docs/participant/eventctl.md](docs/participant/eventctl.md); the event
-repository contains no per-event application runtime.
+## Participant flow
 
-Team formation is deliberately staged so a public, copyable proposal cannot
-reserve another participant or consume quota:
+Each participant runs this once, outside their event checkout:
 
 ```text
-team proposal PR
-  -> PENDING_KEY_PROOFS
-  -> one key-proof/binding PR from each listed member
-  -> READY_TO_ACTIVATE
-  -> organizer activation PR to registry
-  -> ACTIVE, REJECTED, or EXPIRED
+eventctl key-gen --out ~/.eventctl/identity --passphrase-file passphrase.txt
 ```
 
-The proposal directory contains a canonical `team.json` and a deterministic
-member-signature envelope. Each member proof binds the event, repository,
-registration ID, numeric GitHub actor ID, and public key. The workflow compares
-the claimed actor with the authenticated PR author; copying a proof from another
-participant therefore fails.
+The command makes separate Ed25519 signing and age hybrid recipient keys. One
+passphrase protects both private files; the keys are not interchangeable.
 
-Pending proposals do not reserve GitHub IDs, public keys, team names,
-membership, quota, or leaderboard identity. The first fully verified proposal
-that passes the organizer's current-state check and is merged wins.
-
-The current pinned `eventctl` release uses Ed25519 identities and explicit
-multi-signature documents. The envelope is intentionally named and documented
-as an explicit multi-signature container, not as a mathematical BLS aggregate.
-True BLS aggregation can be introduced as a separately reviewed protocol
-version without changing the repository workflow.
-
-## Submission model
-
-Submissions are also untrusted PR proposals:
+### Register
 
 ```text
-fork branch
-  -> encrypted bundle + signed request
-  -> read-only intake check
-  -> organizer review/merge
-  -> one registry transition for (team_id, attempt_id)
+eventctl identity register \
+  --event event/binding.json \
+  --actor-id <numeric-github-id> \
+  --sig-private-key ~/.eventctl/identity/signing.private.age \
+  --recipient-public-key ~/.eventctl/identity/recipient.public.json \
+  --passphrase-file passphrase.txt \
+  --output requests/users/<numeric-github-id>.json
 ```
 
-The same content may be submitted again with a fresh attempt ID by the same
-authorized participant. Replaying an existing signed attempt is idempotent;
-presenting it from another actor, fork, PR, branch, or head SHA is rejected.
+From a fork, open a pull request changing exactly that file. The trusted
+workflow verifies its signature, event reference, and that the filename/claim
+equals the authenticated GitHub actor. The organizer then runs the same
+verification using the immutable pull-request creation time and writes the
+verified identity record to a reviewed `registry` PR.
 
-Scoring is a separate organizer-controlled hook. It reads only a reserved
-attempt and a public result payload, never executes participant code, and can
-write a result only through an admin PR that marks the attempt completed. The
-event can be disabled or moved to `frozen`/`closed` through the lifecycle
-controls without changing request history.
+### Form a team
 
-## One-time organizer setup
-
-The organizer creates the event repository from this template, creates the
-protected `registry` branch, and publishes the signed genesis/configuration.
-`event/event.example.yaml` is only the repository's lifecycle metadata example;
-the signed v1 `eventctl` configuration and protected trust files are organizer
-inputs and must be generated and verified separately before activation.
-An optional organizer PEM or signing key is supplied only during this
-bootstrap/administration ceremony and is never exposed to fork-triggered jobs.
-If activation PRs are merged manually, the bootstrap credential can be retired
-after genesis.
-
-The repository contains no participant private keys, organizer private keys,
-GitHub tokens, or confidential plaintext. Every public branch and fork is
-assumed observable.
-
-Normal organizer activation is cryptographic: `scripts/admin/activate-team.sh`
-requires the pinned `eventctl` binary, protected trust files, and a source-time
-map for the proof PRs. Its explicit `--plan-only` mode exists only for local
-hostile-input tests and says that cryptographic verification was not run.
-
-## Layout
+After the organizer has activated the identities and set `formation_open`, the
+proposer reads the public registry branch and creates a proposal:
 
 ```text
-.github/workflows/        trusted read-only checks and organizer dispatches
-event/                    event configuration and terms
-protocol/schemas/v2/      strict request and registry schemas
-requests/                 merged public request history on main
-registry/                 normalized authoritative state on registry
-scripts/participant/      request preparation helpers
-scripts/actions/          untrusted-data validators
-scripts/admin/            organizer-only plan/apply/view-rebuild helpers
-tests/                    hostile-input and state-model tests
+eventctl team propose \
+  --event event/binding.json --registry registry/state.json \
+  --actor-id <proposer-id> --member <proposer-id> --member <teammate-id> \
+  --sig-private-key ~/.eventctl/identity/signing.private.age \
+  --passphrase-file passphrase.txt \
+  --output requests/teams/<team-uuid>/proposal.json
 ```
 
-Read [docs/organizer/workflow.md](docs/organizer/workflow.md) before creating a
-derived event. Read [docs/participant/team-formation.md](docs/participant/team-formation.md)
-before preparing a team proposal.
+The proposer opens a PR with exactly `proposal.json`; it is only a pending
+request. Every listed member—including the proposer—then submits one separate
+PR from their own fork containing:
+
+```text
+requests/teams/<team-uuid>/proofs/<their-numeric-github-id>.json
+```
+
+created by `eventctl team consent`. The proof workflow binds its filename and
+document actor to the GitHub PR author. It does not activate a team. Pending
+proposals reserve neither a member nor a quota.
+
+The organizer's no-write verification plan receives immutable GitHub creation
+times, for example:
+
+```json
+{
+  "proposal": "2026-08-10T10:00:00Z",
+  "consents": {
+    "123": "2026-08-10T10:05:00Z",
+    "456": "2026-08-10T10:07:00Z"
+  }
+}
+```
+
+It runs `eventctl team verify` against the current protected registry. Only a
+reviewed follow-up state PR adds the returned team record and increments the
+registry revision. A competing or stale plan must be regenerated against the
+new registry head.
+
+### Submit
+
+When the organizer moves the registry to `submissions_open`, a member signs
+the exact opaque bundle they want to submit:
+
+```text
+eventctl submission prepare \
+  --event event/binding.json --input bundle \
+  --team-id <team-uuid> --attempt-id <attempt-uuid> --actor-id <github-id> \
+  --sig-private-key ~/.eventctl/identity/signing.private.age \
+  --passphrase-file passphrase.txt \
+  --output requests/submissions/<attempt-uuid>/request.json
+```
+
+The matching `bundle` lives next to the request. The intake workflow verifies
+the signed payload, authenticated PR actor, active membership, unused attempt
+ID, and both quotas against `registry`. An organizer records the accepted
+attempt in a reviewed registry PR. The replay key is `(team_id, attempt_id)`:
+the same content may be submitted again using a new attempt ID, but an attempt
+ID may not be transferred or changed.
+
+## Encrypted result artifacts
+
+The scorer can encrypt logs to every active team recipient and upload the
+ciphertext as a GitHub Actions artifact:
+
+```text
+eventctl sigcrypt --context stream-binding.json \
+  --sig-private-key organizer-signing.private.age \
+  --enc-public-key member-one/recipient.public.json \
+  --enc-public-key member-two/recipient.public.json \
+  --input judge.log --output judge.log.eventctl
+```
+
+Each recipient runs `eventctl decverify` with the organizer signing public key
+and their own recipient private key. The event does not need a shared team
+private key or an internal key server.
+
+## Testing
+
+There is one test entrypoint:
+
+```text
+mise run test
+```
+
+Pytest coordinates `act`, Docker, a deterministic GitHub API fixture, and the
+real `eventctl` executable against the checked-in workflow YAML. It never runs
+participant fork code. Once the release is pinned, a clean clone downloads and
+verifies the exact host and `act` binaries automatically. Before the first pin,
+local development supplies `EVENTCTL_E2E_NATIVE_BIN` for the host executable
+and `EVENTCTL_E2E_BIN` for the matching Linux executable that `act` runs. A
+published event never uses either test-only override.

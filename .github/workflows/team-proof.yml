@@ -1,8 +1,10 @@
-name: Team proof validation
+name: Team consent validation
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    paths:
+      - 'requests/teams/*/proofs/*.json'
 
 permissions:
   contents: read
@@ -10,7 +12,7 @@ permissions:
 
 jobs:
   validate:
-    name: team / member-proof
+    name: team / member-consent
     if: github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -20,8 +22,16 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - name: Validate actor-bound proof
+
+      - id: eventctl
+        name: Resolve pinned eventctl
+        uses: ./.github/actions/eventctl
+        with:
+          test-bin: ${{ env.EVENTCTL_E2E_BIN }}
+
+      - name: Check the actor-bound consent for the exact proposal
         env:
+          EVENTCTL: ${{ steps.eventctl.outputs.path }}
           GH_TOKEN: ${{ github.token }}
           EVENT_REPOSITORY: ${{ github.repository }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -31,23 +41,39 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          . scripts/lib/common.sh
-          event_require_no_secrets_for_pr
           paths="$RUNNER_TEMP/changed-paths"
-          event_changed_paths "$EVENT_REPOSITORY" "$EVENT_PR_NUMBER" "$paths"
-          count=$(wc -l < "$paths" | tr -d ' ')
-          [[ "$count" == 1 ]] || event_die "proof PR must change exactly one file, got $count"
-          proof_path=$(grep -E '^requests/teams/[^/]+/proofs/[1-9][0-9]{0,19}\.json$' "$paths" || true)
-          [[ -n "$proof_path" ]] || event_die 'proof PR path is invalid'
-          path_actor=${proof_path##*/}
-          path_actor=${path_actor%.json}
-          [[ "$path_actor" == "$EVENT_AUTHOR_ID" ]] || event_die 'proof filename must equal authenticated actor ID'
-          proof_dir=${proof_path%/*}
-          registration_dir=${proof_dir%/proofs}
-          proposal_path="$registration_dir/team.json"
-          event_fetch_pr_blob "$EVENT_REPOSITORY" "$EVENT_BASE_SHA" "$proposal_path" "$RUNNER_TEMP/team.json"
-          event_fetch_pr_blob "$EVENT_REPOSITORY" "$EVENT_HEAD_SHA" "$proof_path" "$RUNNER_TEMP/proof.json"
-          bash scripts/actions/team-proof.sh \
-            --proposal "$RUNNER_TEMP/team.json" \
-            --proof "$RUNNER_TEMP/proof.json" \
-            --actual-author "$EVENT_AUTHOR_ID"
+          gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${EVENT_REPOSITORY}/pulls/${EVENT_PR_NUMBER}/files?per_page=100" \
+            --jq '.[].filename' > "$paths"
+          test "$(wc -l < "$paths" | tr -d ' ')" = 1
+          proof_path=$(cat "$paths")
+          [[ "$proof_path" =~ ^requests/teams/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/proofs/([1-9][0-9]{0,19})\.json$ ]]
+          team_id=${BASH_REMATCH[1]}
+          actor_id=${BASH_REMATCH[2]}
+          test "$actor_id" = "$EVENT_AUTHOR_ID"
+          proposal_path="requests/teams/${team_id}/proposal.json"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${EVENT_REPOSITORY}/contents/${proposal_path}?ref=${EVENT_BASE_SHA}" \
+            > "$RUNNER_TEMP/proposal.json"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${EVENT_REPOSITORY}/contents/${proof_path}?ref=${EVENT_HEAD_SHA}" \
+            > "$RUNNER_TEMP/consent.json"
+          "$EVENTCTL" doctor --event event/binding.json > "$RUNNER_TEMP/doctor.json"
+          proposal_sha256=$(sha256sum "$RUNNER_TEMP/proposal.json" | awk '{print $1}')
+          jq -e \
+            --arg actor "$actor_id" \
+            --arg team "$team_id" \
+            --arg digest "$proposal_sha256" \
+            --argjson event "$(jq -c '.result.event' "$RUNNER_TEMP/doctor.json")" \
+            '
+              (keys_unsorted | sort) == ["actor_id", "event", "expires_at", "issued_at", "key_epoch", "kind", "proposal_sha256", "signature", "signing_kid", "team_id", "v"]
+              and .v == 2
+              and .kind == "team-consent"
+              and .event == $event
+              and .team_id == $team
+              and .actor_id == $actor
+              and .proposal_sha256 == $digest
+              and ((.signature | keys_unsorted | sort) == ["alg", "kid", "value"])
+            ' "$RUNNER_TEMP/consent.json" >/dev/null
+          printf '%s\n' 'team consent is actor-bound; final signature and registry verification is organizer-only'

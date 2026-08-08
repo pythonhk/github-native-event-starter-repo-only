@@ -1,0 +1,48 @@
+name: Pinned eventctl
+description: Resolve the checksum-pinned eventctl release for trusted workflows.
+
+inputs:
+  test-bin:
+    description: E2E-only executable path supplied by the act fixture.
+    required: false
+
+outputs:
+  path:
+    description: Absolute path to the verified eventctl executable.
+    value: ${{ steps.resolve.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        EVENTCTL_TEST_BIN: ${{ inputs.test-bin }}
+      run: |
+        set -Eeuo pipefail
+        if [[ -n "$EVENTCTL_TEST_BIN" ]]; then
+          test -x "$EVENTCTL_TEST_BIN"
+          printf 'path=%s\n' "$EVENTCTL_TEST_BIN" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        lock="$GITHUB_WORKSPACE/tools/eventctl.lock.json"
+        version=$(jq -er '.version' "$lock")
+        repository=$(jq -er '.repository' "$lock")
+        test "$version" != UNRELEASED
+        asset=$(jq -er '.assets["linux-amd64"].name' "$lock")
+        archive_sha256=$(jq -er '.assets["linux-amd64"].archive_sha256' "$lock")
+        binary_sha256=$(jq -er '.assets["linux-amd64"].binary_sha256' "$lock")
+
+        directory="$RUNNER_TEMP/eventctl-${version}"
+        archive="$directory/$asset"
+        binary="$directory/eventctl"
+        mkdir -p "$directory"
+        curl --fail --location --silent --show-error \
+          "https://github.com/${repository}/releases/download/v${version}/${asset}" \
+          --output "$archive"
+        printf '%s  %s\n' "$archive_sha256" "$archive" | sha256sum --check --status
+        tar -xzf "$archive" -C "$directory"
+        test -x "$binary"
+        printf '%s  %s\n' "$binary_sha256" "$binary" | sha256sum --check --status
+        printf 'path=%s\n' "$binary" >> "$GITHUB_OUTPUT"
