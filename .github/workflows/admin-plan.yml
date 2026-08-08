@@ -1,15 +1,19 @@
-name: Organizer state plan
+name: Organizer verification plan
 
 on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Prepare a reviewed registry PR; this workflow never merges it
+        description: Verify one merged request without writing registry state.
         required: true
         type: choice
-        options: [activate-team, reserve-submission]
+        options: [register, activate-team]
       request_path:
-        description: Path to the merged request on main
+        description: Registration file or team request directory on main.
+        required: true
+        type: string
+      source_times:
+        description: JSON trusted times; see README.
         required: true
         type: string
 
@@ -18,7 +22,7 @@ permissions:
 
 jobs:
   plan:
-    name: organizer / state-plan
+    name: organizer / verification-plan
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     environment: organizer-administration
@@ -28,11 +32,68 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - name: Explain organizer merge boundary
+
+      - name: Check out protected registry
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: registry
+          path: registry-branch
+          persist-credentials: false
+
+      - id: eventctl
+        name: Resolve pinned eventctl
+        uses: ./.github/actions/eventctl
+        with:
+          test-bin: ${{ env.EVENTCTL_E2E_BIN }}
+
+      - name: Produce a no-write cryptographic plan
+        env:
+          EVENTCTL: ${{ steps.eventctl.outputs.path }}
+          OPERATION: ${{ inputs.operation }}
+          REQUEST_PATH: ${{ inputs.request_path }}
+          SOURCE_TIMES: ${{ inputs.source_times }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -n '${{ inputs.request_path }}'
-          printf '%s\n' 'Plan generated from trusted main.'
+          source_times="$RUNNER_TEMP/source-times.json"
+          printf '%s' "$SOURCE_TIMES" > "$source_times"
+          jq -e . "$source_times" >/dev/null
+          case "$OPERATION" in
+            register)
+              [[ "$REQUEST_PATH" =~ ^requests/users/[1-9][0-9]{0,19}\.json$ ]]
+              actor_id=${REQUEST_PATH#requests/users/}
+              actor_id=${actor_id%.json}
+              source_time=$(jq -er '.request' "$source_times")
+              "$EVENTCTL" identity verify \
+                --event event/binding.json \
+                --input "$REQUEST_PATH" \
+                --expect-actor-id "$actor_id" \
+                --source-time "$source_time" \
+                --output "$RUNNER_TEMP/verified-identity.json"
+              cat "$RUNNER_TEMP/verified-identity.json"
+              ;;
+            activate-team)
+              [[ "$REQUEST_PATH" =~ ^requests/teams/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+              proposal="$REQUEST_PATH/proposal.json"
+              test -f "$proposal"
+              mapfile -t consents < <(find "$REQUEST_PATH/proofs" -type f -name '*.json' -print | LC_ALL=C sort)
+              test "${#consents[@]}" -gt 0
+              arguments=()
+              for consent in "${consents[@]}"; do
+                actor_id=$(jq -er '.actor_id' "$consent")
+                source_time=$(jq -er --arg actor "$actor_id" '.consents[$actor]' "$source_times")
+                arguments+=(--consent "$consent" --consent-source-time "$actor_id=$source_time")
+              done
+              "$EVENTCTL" team verify \
+                --event event/binding.json \
+                --registry registry-branch/registry/state.json \
+                --proposal "$proposal" \
+                --proposal-source-time "$(jq -er '.proposal' "$source_times")" \
+                "${arguments[@]}" \
+                --output "$RUNNER_TEMP/verified-team.json"
+              cat "$RUNNER_TEMP/verified-team.json"
+              ;;
+            *) exit 2 ;;
+          esac
+          git diff --exit-code -- .
           printf '%s\n' 'No registry write was performed.'
-          printf '%s\n' 'Review and merge an admin/* PR against registry.'

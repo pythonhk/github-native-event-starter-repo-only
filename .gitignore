@@ -1,11 +1,7 @@
 .DS_Store
 .tmp/
 .cache/
-tools/.cache/
 .eventctl/
 *.key.age
-*.pem
-*.private.json
-registry/.working/
 .pytest_cache/
 __pycache__/

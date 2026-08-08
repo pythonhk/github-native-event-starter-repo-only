@@ -7,15 +7,17 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 import threading
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
+
 
 ACT_IMAGE = "catthehacker/ubuntu:act-latest"
 ACT_PATH = "/github/workspace/tests/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -25,31 +27,76 @@ ACT_CONTAINER_ARCH = os.environ.get(
 )
 CHECKOUT_ACTION_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 HEAD_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-HEAD_BRANCH = "submission"
 REPOSITORY = "pythonhk/github-native-event-starter-repo-only"
 REPOSITORY_ID = 123456789
 PR_NUMBER = 17
 PR_ID = 1700000000
 
 
-def _canonical(value: Any) -> bytes:
+@dataclass(frozen=True)
+class Eventctl:
+    native: Path
+    linux: Path
+
+    def run(self, *arguments: str) -> dict[str, Any]:
+        result = subprocess.run(
+            [str(self.native), *arguments],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        response = json.loads(result.stdout)
+        assert response["ok"] is True, response
+        return response["result"]
+
+
+@dataclass(frozen=True)
+class Participant:
+    actor_id: str
+    signing_private: Path
+    recipient_public: Path
+    registration: Path
+    source_time: str
+    record: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Scenario:
+    binding: dict[str, Any]
+    formation_registry: dict[str, Any]
+    submission_registry: dict[str, Any]
+    participants: dict[str, Participant]
+    proposal: Path
+    consents: dict[str, Path]
+    submission: Path
+    bundle: Path
+    team_id: str
+    attempt_id: str
+
+
+def _canonical(value: object) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         + "\n"
-    ).encode("utf-8")
+    ).encode()
 
 
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _read_json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text())
+    assert isinstance(value, dict)
+    return value
 
 
-def _write_json(path: Path, value: Any) -> None:
+def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_canonical(value))
 
 
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_canonical(value).rstrip(b"\n")).hexdigest()
+def _timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
 
 
 def _run_git(checkout: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -62,17 +109,45 @@ def _run_git(checkout: Path, *arguments: str) -> subprocess.CompletedProcess[str
     )
 
 
-def _tracked_snapshot(checkout: Path) -> str:
-    return _run_git(checkout, "ls-files", "--stage").stdout
+def _workspace_state(checkout: Path) -> tuple[str, str, str]:
+    return (
+        _run_git(checkout, "ls-files", "--stage").stdout,
+        _run_git(checkout, "status", "--short").stdout,
+        subprocess.run(
+            ["git", "diff", "--", "."],
+            cwd=checkout,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout,
+    )
 
 
-def _event(
-    *,
-    author_id: int,
-    base_sha: str,
-    head_sha: str = HEAD_SHA,
-    head_branch: str = HEAD_BRANCH,
-) -> dict[str, Any]:
+def _assert_no_git_mutation(
+    checkout: Path, before: tuple[str, str, str]
+) -> None:
+    assert _workspace_state(checkout) == before
+
+
+def _required_binary(name: str) -> Path:
+    configured = os.environ.get(name)
+    if not configured:
+        pytest.fail(f"{name} is required for the eventctl v2 act E2E suite")
+    path = Path(configured)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        pytest.fail(f"{name} is not an executable file: {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def eventctl() -> Eventctl:
+    return Eventctl(
+        native=_required_binary("EVENTCTL_E2E_NATIVE_BIN"),
+        linux=_required_binary("EVENTCTL_E2E_BIN"),
+    )
+
+
+def _event(*, author_id: int, created_at: str) -> dict[str, Any]:
     return {
         "action": "opened",
         "repository": {
@@ -84,15 +159,16 @@ def _event(
         "pull_request": {
             "number": PR_NUMBER,
             "id": PR_ID,
+            "created_at": created_at,
             "user": {"id": author_id, "login": "participant"},
             "base": {
                 "ref": "main",
-                "sha": base_sha,
+                "sha": "",
                 "repo": {"id": REPOSITORY_ID, "owner": {"login": "pythonhk"}},
             },
             "head": {
-                "ref": head_branch,
-                "sha": head_sha,
+                "ref": "participant-request",
+                "sha": HEAD_SHA,
                 "repo": {
                     "id": 987654321,
                     "owner": {"login": "participant"},
@@ -103,10 +179,14 @@ def _event(
     }
 
 
-def _dispatch_event(*, ref: str, inputs: Mapping[str, str]) -> dict[str, Any]:
+def _dispatch_event(*, operation: str, request_path: str, source_times: dict[str, Any]) -> dict[str, Any]:
     return {
-        "ref": ref,
-        "inputs": dict(inputs),
+        "ref": "refs/heads/main",
+        "inputs": {
+            "operation": operation,
+            "request_path": request_path,
+            "source_times": json.dumps(source_times, separators=(",", ":")),
+        },
         "repository": {
             "id": REPOSITORY_ID,
             "full_name": REPOSITORY,
@@ -117,10 +197,18 @@ def _dispatch_event(*, ref: str, inputs: Mapping[str, str]) -> dict[str, Any]:
     }
 
 
-def _push_event(*, ref: str, commit_sha: str) -> dict[str, Any]:
-    event = _dispatch_event(ref=ref, inputs={})
-    event.update({"after": commit_sha, "before": "0" * 40})
-    return event
+def _push_event() -> dict[str, Any]:
+    return {
+        "ref": "refs/heads/registry",
+        "before": "0" * 40,
+        "after": "",
+        "repository": {
+            "id": REPOSITORY_ID,
+            "full_name": REPOSITORY,
+            "name": "github-native-event-starter-repo-only",
+            "owner": {"login": "pythonhk"},
+        },
+    }
 
 
 def _prepare_api(
@@ -131,12 +219,13 @@ def _prepare_api(
     blobs: Mapping[tuple[str, str], bytes],
 ) -> Path:
     root = checkout / ".act-e2e"
-    _write_json(root / "event.json", event)
-    pr_number = event["pull_request"]["number"]
-    _write_json(
-        root / "pulls" / f"{pr_number}.json",
-        [{"filename": path} for path in changed_paths],
-    )
+    _write_json(root / "event.json", dict(event))
+    pull_request = event.get("pull_request")
+    if isinstance(pull_request, Mapping):
+        _write_json(
+            root / "pulls" / f"{pull_request['number']}.json",
+            [{"filename": path} for path in changed_paths],
+        )
 
     content_map: dict[str, str] = {}
     for index, ((ref, path), content) in enumerate(blobs.items()):
@@ -165,15 +254,17 @@ def _checkout(repo_root: Path, destination: Path) -> Path:
         "origin",
         f"https://github.com/{REPOSITORY}.git",
     )
-    # The black-box support executable is deliberately copied from the working
-    # tree so the test works before the test-only files are committed.
-    support_source = repo_root / "tests" / "e2e"
-    shutil.copytree(support_source, destination / "tests" / "e2e", dirs_exist_ok=True)
-    shutil.copytree(
-        repo_root / ".github" / "workflows",
-        destination / ".github" / "workflows",
-        dirs_exist_ok=True,
-    )
+    for relative_path in (
+        Path(".github/actions"),
+        Path(".github/workflows"),
+        Path("event"),
+        Path("registry"),
+        Path("tests/e2e"),
+        Path("tools"),
+    ):
+        source = repo_root / relative_path
+        if source.exists():
+            shutil.copytree(source, destination / relative_path, dirs_exist_ok=True)
     return destination
 
 
@@ -183,6 +274,7 @@ def _act(
     workflow: str,
     server_url: str,
     action_path: Path,
+    linux_eventctl: Path,
     event_name: str = "pull_request_target",
 ) -> subprocess.CompletedProcess[str]:
     artifact_path = checkout / ".act-e2e" / "artifacts"
@@ -204,7 +296,8 @@ def _act(
         (
             "--add-host=host.docker.internal:host-gateway "
             f"-v {checkout / 'tests/e2e/bin/gh'}:/usr/local/bin/gh:ro "
-            f"-v {checkout / '.act-e2e'}:/tmp/gh-mock:ro"
+            f"-v {checkout / '.act-e2e'}:/tmp/gh-mock:ro "
+            f"-v {linux_eventctl}:/tmp/eventctl:ro"
         ),
         "--eventpath",
         str(event_path),
@@ -212,6 +305,8 @@ def _act(
         workflow,
         "--env",
         "GH_MOCK_ROOT=/tmp/gh-mock",
+        "--env",
+        "EVENTCTL_E2E_BIN=/tmp/eventctl",
         "--env",
         f"GITHUB_SERVER_URL={server_url}",
         "--env",
@@ -233,7 +328,6 @@ def _act(
 
 @contextmanager
 def _git_server(checkout: Path, tmp_path: Path):
-    """Serve the exact test checkout to actions/checkout over local HTTP."""
     fixture_root = checkout / ".act-e2e"
     (fixture_root / "pulls").mkdir(parents=True, exist_ok=True)
     (fixture_root / "blobs").mkdir(parents=True, exist_ok=True)
@@ -242,9 +336,8 @@ def _git_server(checkout: Path, tmp_path: Path):
     remote_root = tmp_path / "git-root"
     remote = remote_root / "pythonhk" / "github-native-event-starter-repo-only"
     remote.parent.mkdir(parents=True)
-    subprocess.run(
-        ["git", "init", "--bare", str(remote)], check=True, capture_output=True
-    )
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+
     action_cache = Path.home() / ".cache" / "act" / "actions-checkout.git"
     if not action_cache.is_dir():
         raise AssertionError(f"act action cache is missing: {action_cache}")
@@ -262,21 +355,22 @@ def _git_server(checkout: Path, tmp_path: Path):
     )
     _run_git(checkout, "config", "user.name", "act-e2e")
     _run_git(checkout, "config", "user.email", "act-e2e@example.invalid")
-    _run_git(
-        checkout,
-        "add",
-        "tests/e2e",
+    paths = [
+        ".github/actions",
         ".github/workflows",
+        "event",
         "registry",
+        "tests/e2e",
+        "tools",
         ".act-e2e/pulls",
         ".act-e2e/blobs",
         ".act-e2e/contents.json",
-    )
+    ]
+    if (checkout / "requests").exists():
+        paths.append("requests")
+    _run_git(checkout, "add", *paths)
     _run_git(checkout, "commit", "-m", "act e2e fixture")
     base_sha = _run_git(checkout, "rev-parse", "HEAD").stdout.strip()
-    # A hosted checkout is shallow, so Git refuses to update a bare ref
-    # directly from that source. Transfer the object first, then install both
-    # fixture refs explicitly.
     subprocess.run(
         ["git", "-C", str(remote), "fetch", str(checkout), base_sha],
         check=True,
@@ -284,14 +378,7 @@ def _git_server(checkout: Path, tmp_path: Path):
     )
     for branch in ("main", "registry"):
         subprocess.run(
-            [
-                "git",
-                "-C",
-                str(remote),
-                "update-ref",
-                f"refs/heads/{branch}",
-                base_sha,
-            ],
+            ["git", "-C", str(remote), "update-ref", f"refs/heads/{branch}", base_sha],
             check=True,
             capture_output=True,
         )
@@ -367,35 +454,17 @@ def _git_server(checkout: Path, tmp_path: Path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield (
-            f"http://host.docker.internal:{server_port}",
-            base_sha,
-            action_source,
-        )
+        yield f"http://host.docker.internal:{server_port}", base_sha, action_source
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
 
-def _assert_no_git_mutation(checkout: Path, before: str) -> None:
-    assert _tracked_snapshot(checkout) == before
-    diff = subprocess.run(
-        ["git", "diff", "--exit-code", "--", "."],
-        cwd=checkout,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert diff.returncode == 0, diff.stdout + diff.stderr
-
-
 def _require_act() -> None:
     if shutil.which(os.environ.get("ACT_BIN", "act")) is None:
         pytest.fail("act is required for the workflow black-box suite")
-    docker_check = subprocess.run(
-        ["docker", "info"], text=True, capture_output=True, check=False
-    )
+    docker_check = subprocess.run(["docker", "info"], text=True, capture_output=True, check=False)
     if docker_check.returncode != 0:
         pytest.fail("Docker is required for the workflow black-box suite")
     action_cache = Path.home() / ".cache" / "act" / "actions-checkout.git"
@@ -409,470 +478,493 @@ def act_checkout(repo_root: Path, tmp_path: Path) -> Path:
     return _checkout(repo_root, tmp_path / "checkout")
 
 
+def _participant(
+    eventctl: Eventctl,
+    root: Path,
+    binding: Path,
+    passphrase: Path,
+    actor_id: str,
+) -> Participant:
+    key_directory = root / "keys" / actor_id
+    generated = eventctl.run(
+        "key-gen",
+        "--out",
+        str(key_directory),
+        "--passphrase-file",
+        str(passphrase),
+    )
+    registration = root / "requests" / "users" / f"{actor_id}.json"
+    registration.parent.mkdir(parents=True, exist_ok=True)
+    eventctl.run(
+        "identity",
+        "register",
+        "--event",
+        str(binding),
+        "--actor-id",
+        actor_id,
+        "--sig-private-key",
+        generated["signing_private_key"],
+        "--recipient-public-key",
+        generated["recipient_public_key"],
+        "--passphrase-file",
+        str(passphrase),
+        "--output",
+        str(registration),
+    )
+    document = _read_json(registration)
+    record_path = root / "records" / f"{actor_id}.json"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    eventctl.run(
+        "identity",
+        "verify",
+        "--event",
+        str(binding),
+        "--input",
+        str(registration),
+        "--expect-actor-id",
+        actor_id,
+        "--source-time",
+        document["issued_at"],
+        "--output",
+        str(record_path),
+    )
+    return Participant(
+        actor_id=actor_id,
+        signing_private=Path(generated["signing_private_key"]),
+        recipient_public=Path(generated["recipient_public_key"]),
+        registration=registration,
+        source_time=document["issued_at"],
+        record=_read_json(record_path),
+    )
+
+
 @pytest.fixture
-def source_sha(repo_root: Path) -> str:
-    return _run_git(repo_root, "rev-parse", "HEAD").stdout.strip()
-
-
-def test_team_proposal_workflow_is_the_system_under_test(
-    act_checkout: Path,
-    repo_root: Path,
-    source_sha: str,
-) -> None:
-    team = _read_json(repo_root / "tests/fixtures/team.json")
-    signatures = _read_json(repo_root / "tests/fixtures/signatures.json")
-    signatures["proposal_sha256"] = _digest(team)
-    proposal_digest = _digest(team["eventctl_proposal"])
-    for signature in signatures["signatures"]:
-        signature["consent"]["proposal_digest"] = proposal_digest
-
-    proposal_path = f"requests/teams/{team['registration_id']}/team.json"
-    signatures_path = f"requests/teams/{team['registration_id']}/signatures.json"
-    event = _event(author_id=101, base_sha=source_sha)
-    event_path = _prepare_api(
-        act_checkout,
-        event=event,
-        changed_paths=[proposal_path, signatures_path],
-        blobs={
-            (HEAD_SHA, proposal_path): _canonical(team),
-            (HEAD_SHA, signatures_path): _canonical(signatures),
-        },
+def scenario(eventctl: Eventctl, tmp_path: Path) -> Scenario:
+    root = tmp_path / "scenario"
+    passphrase = root / "passphrase.txt"
+    passphrase.parent.mkdir(parents=True)
+    passphrase.write_text("test passphrase\n")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    binding = {
+        "v": 2,
+        "kind": "event-binding",
+        "protocol": "eventctl/v2",
+        "event_id": "act-event-2026",
+        "event_epoch": 1,
+        "repository_id": str(REPOSITORY_ID),
+        "valid_from": _timestamp(now - timedelta(minutes=1)),
+        "valid_until": _timestamp(now + timedelta(days=8)),
+        "terms_sha256": "a" * 64,
+        "ttl_seconds": {"registration": 604800, "team": 604800, "submission": 86400},
+        "limits": {"team_min": 1, "team_max": 5, "attempts_per_team": 10, "attempts_total": 200},
+    }
+    binding_path = root / "event" / "binding.json"
+    _write_json(binding_path, binding)
+    reference = eventctl.run("doctor", "--event", str(binding_path))["event"]
+    participants = {
+        actor_id: _participant(eventctl, root, binding_path, passphrase, actor_id)
+        for actor_id in ("101", "102")
+    }
+    formation_registry = {
+        "v": 2,
+        "kind": "event-registry",
+        "event": reference,
+        "revision": 2,
+        "phase": "formation_open",
+        "enabled": True,
+        "disabled_reason": "",
+        "identities": [participants[actor_id].record for actor_id in ("101", "102")],
+        "teams": [],
+        "attempts": [],
+    }
+    formation_registry_path = root / "registry" / "formation.json"
+    _write_json(formation_registry_path, formation_registry)
+    proposal = root / "requests" / "teams" / "22222222-2222-4222-8222-222222222222" / "proposal.json"
+    proposal.parent.mkdir(parents=True, exist_ok=True)
+    eventctl.run(
+        "team",
+        "propose",
+        "--event",
+        str(binding_path),
+        "--registry",
+        str(formation_registry_path),
+        "--team-id",
+        "22222222-2222-4222-8222-222222222222",
+        "--actor-id",
+        "101",
+        "--member",
+        "101",
+        "--member",
+        "102",
+        "--sig-private-key",
+        str(participants["101"].signing_private),
+        "--passphrase-file",
+        str(passphrase),
+        "--output",
+        str(proposal),
     )
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["pull_request"]["base"]["sha"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/team-proposal.yml",
-            server_url,
-            action_path,
+    consents: dict[str, Path] = {}
+    for actor_id, participant in participants.items():
+        consent = proposal.parent / "proofs" / f"{actor_id}.json"
+        consent.parent.mkdir(parents=True, exist_ok=True)
+        eventctl.run(
+            "team",
+            "consent",
+            "--event",
+            str(binding_path),
+            "--registry",
+            str(formation_registry_path),
+            "--proposal",
+            str(proposal),
+            "--actor-id",
+            actor_id,
+            "--sig-private-key",
+            str(participant.signing_private),
+            "--passphrase-file",
+            str(passphrase),
+            "--output",
+            str(consent),
         )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "PENDING_KEY_PROOFS" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
-
-
-def test_team_proposal_workflow_reaches_ready_after_all_consents(
-    act_checkout: Path,
-    repo_root: Path,
-    source_sha: str,
-) -> None:
-    team = _read_json(repo_root / "tests/fixtures/team.json")
-    signatures = _read_json(repo_root / "tests/fixtures/signatures.json")
-    proposal_digest = _digest(team["eventctl_proposal"])
-    signatures["proposal_sha256"] = _digest(team)
-    for signature in signatures["signatures"]:
-        signature["consent"]["proposal_digest"] = proposal_digest
-    key_id = "c" * 64
-    signatures["signatures"].append(
-        {
-            "github_id": "103",
-            "key_id": key_id,
-            "consent": {
-                "kind": "team_consent",
-                "event_id": "demo-event-2026",
-                "actor_id": "103",
-                "base_repository": {"id": str(REPOSITORY_ID)},
-                "team_id": team["team_id"],
-                "key_id": key_id,
-                "proposal_digest": proposal_digest,
-                "signature": {"key_id": key_id},
-            },
-        }
-    )
-    proposal_path = f"requests/teams/{team['registration_id']}/team.json"
-    signatures_path = f"requests/teams/{team['registration_id']}/signatures.json"
-    event = _event(author_id=101, base_sha=source_sha)
-    event_path = _prepare_api(
-        act_checkout,
-        event=event,
-        changed_paths=[proposal_path, signatures_path],
-        blobs={
-            (HEAD_SHA, proposal_path): _canonical(team),
-            (HEAD_SHA, signatures_path): _canonical(signatures),
-        },
-    )
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["pull_request"]["base"]["sha"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/team-proposal.yml",
-            server_url,
-            action_path,
+        consents[actor_id] = consent
+    verification = root / "records" / "team.json"
+    team_arguments = [
+        "team",
+        "verify",
+        "--event",
+        str(binding_path),
+        "--registry",
+        str(formation_registry_path),
+        "--proposal",
+        str(proposal),
+        "--proposal-source-time",
+        _read_json(proposal)["issued_at"],
+    ]
+    for actor_id, consent in consents.items():
+        team_arguments.extend(
+            [
+                "--consent",
+                str(consent),
+                "--consent-source-time",
+                f"{actor_id}={_read_json(consent)['issued_at']}",
+            ]
         )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "READY_TO_ACTIVATE" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
-
-
-def test_team_proof_workflow_rejects_authenticated_actor_mismatch(
-    act_checkout: Path,
-    repo_root: Path,
-    source_sha: str,
-) -> None:
-    team = _read_json(repo_root / "tests/fixtures/team.json")
-    proof = _read_json(repo_root / "tests/fixtures/proofs/101.json")
-    proof["consent"]["proposal_digest"] = _digest(team["eventctl_proposal"])
-    proof_path = f"requests/teams/{team['registration_id']}/proofs/102.json"
-    event = _event(author_id=102, base_sha=source_sha)
-    event_path = _prepare_api(
-        act_checkout,
-        event=event,
-        changed_paths=[proof_path],
-        blobs={
-            (
-                source_sha,
-                f"requests/teams/{team['registration_id']}/team.json",
-            ): _canonical(team),
-            (HEAD_SHA, proof_path): _canonical(proof),
-        },
-    )
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["pull_request"]["base"]["sha"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/team-proof.yml",
-            server_url,
-            action_path,
-        )
-
-    assert result.returncode != 0
-    combined_output = f"{result.stdout}\n{result.stderr}"
-    assert "proof actor mismatch" in combined_output, combined_output
-    _assert_no_git_mutation(act_checkout, before)
-
-
-def test_team_proof_workflow_accepts_actor_bound_proof(
-    act_checkout: Path,
-    repo_root: Path,
-    source_sha: str,
-) -> None:
-    team = _read_json(repo_root / "tests/fixtures/team.json")
-    proof = _read_json(repo_root / "tests/fixtures/proofs/101.json")
-    proof["consent"]["proposal_digest"] = _digest(team["eventctl_proposal"])
-    proof_path = f"requests/teams/{team['registration_id']}/proofs/101.json"
-    event = _event(author_id=101, base_sha=source_sha)
-    event_path = _prepare_api(
-        act_checkout,
-        event=event,
-        changed_paths=[proof_path],
-        blobs={
-            (
-                source_sha,
-                f"requests/teams/{team['registration_id']}/team.json",
-            ): _canonical(team),
-            (HEAD_SHA, proof_path): _canonical(proof),
-        },
-    )
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["pull_request"]["base"]["sha"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/team-proof.yml",
-            server_url,
-            action_path,
-        )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "key proof structurally valid and actor-bound" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
-
-
-def test_registration_workflow_accepts_actor_bound_request(
-    act_checkout: Path,
-    repo_root: Path,
-    source_sha: str,
-) -> None:
-    proof = _read_json(repo_root / "tests/fixtures/proofs/101.json")
-    registration = proof["registration"]
-    registration.update(
-        {
-            "key_epoch": "1",
-            "participant_key": {
-                "key_id": registration["key_id"],
-                "public_key": "PUB101",
-            },
-        }
-    )
-    request_path = "requests/users/101.json"
-    event = _event(author_id=101, base_sha=source_sha)
-    event_path = _prepare_api(
-        act_checkout,
-        event=event,
-        changed_paths=[request_path],
-        blobs={(HEAD_SHA, request_path): _canonical(registration)},
-    )
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["pull_request"]["base"]["sha"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/registration.yml",
-            server_url,
-            action_path,
-        )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "registration request structurally valid and actor-bound" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
-
-
-def test_submission_workflow_accepts_arranged_bundle_without_mutating_registry(
-    act_checkout: Path,
-    repo_root: Path,
-    source_sha: str,
-) -> None:
-    """The producer runs before act; the submission workflow only validates its output."""
-    submission = _read_json(repo_root / "tests/fixtures/submission.json")
-    bundle_path_on_host = act_checkout.parent / "producer-output.bin"
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from pathlib import Path; Path(__import__('sys').argv[1]).write_bytes(b'encrypted producer output\\n')",
-            str(bundle_path_on_host),
+    team_arguments.extend(["--output", str(verification)])
+    eventctl.run(*team_arguments)
+    verified_team = _read_json(verification)
+    submission_registry = {
+        **formation_registry,
+        "revision": 3,
+        "phase": "submissions_open",
+        "teams": [
+            {
+                "team_id": verified_team["team_id"],
+                "proposal_sha256": verified_team["proposal_sha256"],
+                "members": verified_team["members"],
+            }
         ],
-        check=True,
+    }
+    payload = root / "bundle"
+    payload.write_bytes(b"opaque package payload\n")
+    submission = root / "requests" / "submissions" / "33333333-3333-4333-8333-333333333333" / "request.json"
+    submission.parent.mkdir(parents=True, exist_ok=True)
+    eventctl.run(
+        "submission",
+        "prepare",
+        "--event",
+        str(binding_path),
+        "--input",
+        str(payload),
+        "--team-id",
+        verified_team["team_id"],
+        "--attempt-id",
+        "33333333-3333-4333-8333-333333333333",
+        "--actor-id",
+        "101",
+        "--sig-private-key",
+        str(participants["101"].signing_private),
+        "--passphrase-file",
+        str(passphrase),
+        "--output",
+        str(submission),
     )
-    bundle = bundle_path_on_host.read_bytes()
-    bundle_digest = hashlib.sha256(bundle).hexdigest()
-    submission["head_sha"] = HEAD_SHA
-    submission["pr_id"] = str(PR_ID)
-    submission["head_branch"] = HEAD_BRANCH
-    submission["bundle_sha256"] = bundle_digest
-    submission["eventctl_request"]["pull_request"]["head_sha"] = HEAD_SHA
-    submission["eventctl_request"]["pull_request"]["id"] = str(PR_ID)
-    submission["eventctl_request"]["pull_request"]["head_ref"] = HEAD_BRANCH
-    submission["eventctl_request"]["bundle"]["sha256"] = bundle_digest
+    return Scenario(
+        binding=binding,
+        formation_registry=formation_registry,
+        submission_registry=submission_registry,
+        participants=participants,
+        proposal=proposal,
+        consents=consents,
+        submission=submission,
+        bundle=payload,
+        team_id=verified_team["team_id"],
+        attempt_id="33333333-3333-4333-8333-333333333333",
+    )
 
-    attempt_dir = f"requests/submissions/{submission['attempt_id']}"
-    request_path = f"{attempt_dir}/request.json"
-    bundle_path = f"{attempt_dir}/bundle.eventctl"
-    event = _event(author_id=101, base_sha=source_sha)
+
+def _configure_checkout(checkout: Path, scenario: Scenario, registry: dict[str, Any]) -> None:
+    _write_json(checkout / "event" / "binding.json", scenario.binding)
+    _write_json(checkout / "registry" / "state.json", registry)
+
+
+def _exercise(
+    checkout: Path,
+    event: dict[str, Any],
+    event_path: Path,
+    workflow: str,
+    eventctl: Eventctl,
+    event_name: str = "pull_request_target",
+) -> subprocess.CompletedProcess[str]:
+    with _git_server(checkout, checkout.parent) as (server_url, base_sha, action_path):
+        if "pull_request" in event:
+            event["pull_request"]["base"]["sha"] = base_sha
+        elif event_name == "push":
+            event["after"] = base_sha
+        _write_json(event_path, event)
+        before = _workspace_state(checkout)
+        result = _act(
+            checkout,
+            event_path,
+            workflow,
+            server_url,
+            action_path,
+            eventctl.linux,
+            event_name,
+        )
+    _assert_no_git_mutation(checkout, before)
+    return result
+
+
+def test_registration_workflow_verifies_a_real_eventctl_request(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.formation_registry)
+    participant = scenario.participants["101"]
+    path = "requests/users/101.json"
+    event = _event(author_id=101, created_at=participant.source_time)
+    event_path = _prepare_api(
+        act_checkout,
+        event=event,
+        changed_paths=[path],
+        blobs={(HEAD_SHA, path): participant.registration.read_bytes()},
+    )
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/registration.yml",
+        eventctl,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "registration request is signed" in result.stdout
+
+
+def test_registration_workflow_rejects_a_transferred_identity(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.formation_registry)
+    path = "requests/users/102.json"
+    event = _event(author_id=102, created_at=scenario.participants["101"].source_time)
+    event_path = _prepare_api(
+        act_checkout,
+        event=event,
+        changed_paths=[path],
+        blobs={(HEAD_SHA, path): scenario.participants["101"].registration.read_bytes()},
+    )
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/registration.yml",
+        eventctl,
+    )
+    assert result.returncode != 0
+
+
+def test_team_proposal_workflow_keeps_the_request_pending(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.formation_registry)
+    path = f"requests/teams/{scenario.team_id}/proposal.json"
+    event = _event(author_id=101, created_at=_read_json(scenario.proposal)["issued_at"])
+    event_path = _prepare_api(
+        act_checkout,
+        event=event,
+        changed_paths=[path],
+        blobs={(HEAD_SHA, path): scenario.proposal.read_bytes()},
+    )
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/team-proposal.yml",
+        eventctl,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pending member consents" in result.stdout
+
+
+def test_team_consent_workflow_binds_the_github_actor(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.formation_registry)
+    proposal_path = act_checkout / "requests" / "teams" / scenario.team_id / "proposal.json"
+    proposal_path.parent.mkdir(parents=True, exist_ok=True)
+    proposal_path.write_bytes(scenario.proposal.read_bytes())
+    path = f"requests/teams/{scenario.team_id}/proofs/102.json"
+    event = _event(author_id=102, created_at=_read_json(scenario.consents["102"])["issued_at"])
+    event_path = _prepare_api(
+        act_checkout,
+        event=event,
+        changed_paths=[path],
+        blobs={
+            ("main", f"requests/teams/{scenario.team_id}/proposal.json"): scenario.proposal.read_bytes(),
+            (HEAD_SHA, path): scenario.consents["102"].read_bytes(),
+        },
+    )
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/team-proof.yml",
+        eventctl,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "team consent is actor-bound" in result.stdout
+
+
+def test_team_consent_workflow_rejects_another_members_proof(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.formation_registry)
+    proposal_path = act_checkout / "requests" / "teams" / scenario.team_id / "proposal.json"
+    proposal_path.parent.mkdir(parents=True, exist_ok=True)
+    proposal_path.write_bytes(scenario.proposal.read_bytes())
+    path = f"requests/teams/{scenario.team_id}/proofs/102.json"
+    event = _event(author_id=102, created_at=_read_json(scenario.consents["101"])["issued_at"])
+    event_path = _prepare_api(
+        act_checkout,
+        event=event,
+        changed_paths=[path],
+        blobs={
+            ("main", f"requests/teams/{scenario.team_id}/proposal.json"): scenario.proposal.read_bytes(),
+            (HEAD_SHA, path): scenario.consents["101"].read_bytes(),
+        },
+    )
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/team-proof.yml",
+        eventctl,
+    )
+    assert result.returncode != 0
+
+
+def test_submission_workflow_verifies_active_membership_and_payload(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.submission_registry)
+    request_path = f"requests/submissions/{scenario.attempt_id}/request.json"
+    bundle_path = f"requests/submissions/{scenario.attempt_id}/bundle"
+    event = _event(author_id=101, created_at=_read_json(scenario.submission)["issued_at"])
     event_path = _prepare_api(
         act_checkout,
         event=event,
         changed_paths=[request_path, bundle_path],
         blobs={
-            (HEAD_SHA, request_path): _canonical(submission),
-            (HEAD_SHA, bundle_path): bundle,
-            ("registry", "registry/state.json"): (
-                repo_root / "tests/fixtures/registry-active.json"
-            ).read_bytes(),
+            (HEAD_SHA, request_path): scenario.submission.read_bytes(),
+            (HEAD_SHA, bundle_path): scenario.bundle.read_bytes(),
+            ("registry", "registry/state.json"): _canonical(scenario.submission_registry),
         },
     )
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["pull_request"]["base"]["sha"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/submission.yml",
-            server_url,
-            action_path,
-        )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/submission.yml",
+        eventctl,
     )
-    assert "submission request structurally valid" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "submission request is signed" in result.stdout
 
 
-def test_registry_workflow_validates_registry_branch(
-    act_checkout: Path,
+def test_submission_workflow_rejects_actor_replay(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
 ) -> None:
-    event = _push_event(ref="refs/heads/registry", commit_sha="0" * 40)
-    event_path = act_checkout / ".act-e2e" / "event.json"
-    _write_json(event_path, event)
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        base_sha,
-        action_path,
-    ):
-        event["after"] = base_sha
-        _write_json(event_path, event)
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/registry.yml",
-            server_url,
-            action_path,
-            event_name="push",
-        )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    _configure_checkout(act_checkout, scenario, scenario.submission_registry)
+    request_path = f"requests/submissions/{scenario.attempt_id}/request.json"
+    bundle_path = f"requests/submissions/{scenario.attempt_id}/bundle"
+    event = _event(author_id=102, created_at=_read_json(scenario.submission)["issued_at"])
+    event_path = _prepare_api(
+        act_checkout,
+        event=event,
+        changed_paths=[request_path, bundle_path],
+        blobs={
+            (HEAD_SHA, request_path): scenario.submission.read_bytes(),
+            (HEAD_SHA, bundle_path): scenario.bundle.read_bytes(),
+            ("registry", "registry/state.json"): _canonical(scenario.submission_registry),
+        },
     )
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/submission.yml",
+        eventctl,
+    )
+    assert result.returncode != 0
+
+
+def test_registry_workflow_validates_the_single_authoritative_document(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
+) -> None:
+    _configure_checkout(act_checkout, scenario, scenario.submission_registry)
+    event = _push_event()
+    event_path = _prepare_api(act_checkout, event=event, changed_paths=[], blobs={})
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/registry.yml",
+        eventctl,
+        event_name="push",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "registry / canonical-state" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
 
 
-def test_scoring_workflow_validates_arranged_result(
-    act_checkout: Path,
-    repo_root: Path,
+def test_admin_plan_verifies_the_full_team_without_a_state_write(
+    act_checkout: Path, eventctl: Eventctl, scenario: Scenario
 ) -> None:
-    attempt_id = "33333333-3333-4333-8333-333333333333"
-    team_id = "22222222-2222-4222-8222-222222222222"
-    request_digest = "d" * 64
-    state = _read_json(repo_root / "tests/fixtures/registry-active.json")
-    state["attempts"][attempt_id] = {
-        "attempt_id": attempt_id,
-        "team_id": team_id,
-        "github_id": "101",
-        "request_digest": request_digest,
-        "status": "reserved",
+    _configure_checkout(act_checkout, scenario, scenario.formation_registry)
+    proposal_path = act_checkout / "requests" / "teams" / scenario.team_id / "proposal.json"
+    proposal_path.parent.mkdir(parents=True, exist_ok=True)
+    proposal_path.write_bytes(scenario.proposal.read_bytes())
+    for actor_id, consent in scenario.consents.items():
+        target = proposal_path.parent / "proofs" / f"{actor_id}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(consent.read_bytes())
+    source_times = {
+        "proposal": _read_json(scenario.proposal)["issued_at"],
+        "consents": {
+            actor_id: _read_json(consent)["issued_at"]
+            for actor_id, consent in scenario.consents.items()
+        },
     }
-    _write_json(act_checkout / "registry" / "state.json", state)
-    _write_json(
-        act_checkout / "registry" / "users" / "index.json",
-        {"schema": "pythonhk.registry-users/v2", "users": state["users"]},
-    )
-    _write_json(
-        act_checkout / "registry" / "teams" / "index.json",
-        {"schema": "pythonhk.registry-teams/v2", "teams": state["teams"]},
-    )
-    _write_json(
-        act_checkout / "registry" / "memberships" / "index.json",
-        {
-            "schema": "pythonhk.registry-memberships/v2",
-            "memberships": state["memberships"],
-        },
-    )
-    _write_json(
-        act_checkout / "registry" / "submissions" / "index.json",
-        {
-            "schema": "pythonhk.registry-submissions/v2",
-            "attempts": state["attempts"],
-        },
-    )
-    payload_path = act_checkout / "registry" / "scoring" / "act.payload.json"
-    _write_json(payload_path, {"grader": "isolated-test", "score": 42})
-    payload_digest = hashlib.sha256(payload_path.read_bytes()).hexdigest()
-    result_path = act_checkout / "registry" / "scoring" / "act.result.json"
-    _write_json(
-        result_path,
-        {
-            "schema": "pythonhk.scoring-result/v2",
-            "event_id": state["event_id"],
-            "attempt_id": attempt_id,
-            "team_id": team_id,
-            "status": "accepted",
-            "payload_sha256": payload_digest,
-            "scorer_id": "isolated-test",
-            "scorer_version": "1.0.0",
-            "source_attempt_digest": request_digest,
-            "issued_at": "2026-08-06T00:00:00Z",
-        },
-    )
-    inputs = {
-        "attempt_id": attempt_id,
-        "result_path": "registry/scoring/act.result.json",
-        "payload_path": "registry/scoring/act.payload.json",
-    }
-    event = _dispatch_event(ref="refs/heads/registry", inputs=inputs)
-    event_path = act_checkout / ".act-e2e" / "event.json"
-    _write_json(event_path, event)
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        _base_sha,
-        action_path,
-    ):
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/scoring.yml",
-            server_url,
-            action_path,
-            event_name="workflow_dispatch",
-        )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "scoring / isolated-result-check" in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
-
-
-def test_organizer_plan_workflow_does_not_write_registry(
-    act_checkout: Path,
-) -> None:
     event = _dispatch_event(
-        ref="refs/heads/main",
-        inputs={
-            "operation": "reserve-submission",
-            "request_path": "requests/example.json",
-        },
+        operation="activate-team",
+        request_path=f"requests/teams/{scenario.team_id}",
+        source_times=source_times,
     )
-    event_path = act_checkout / ".act-e2e" / "event.json"
-    _write_json(event_path, event)
-    with _git_server(act_checkout, act_checkout.parent) as (
-        server_url,
-        _base_sha,
-        action_path,
-    ):
-        before = _tracked_snapshot(act_checkout)
-        result = _act(
-            act_checkout,
-            event_path,
-            ".github/workflows/admin-plan.yml",
-            server_url,
-            action_path,
-            event_name="workflow_dispatch",
-        )
-
-    assert result.returncode == 0, (
-        f"act failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    event_path = _prepare_api(act_checkout, event=event, changed_paths=[], blobs={})
+    result = _exercise(
+        act_checkout,
+        event,
+        event_path,
+        ".github/workflows/admin-plan.yml",
+        eventctl,
+        event_name="workflow_dispatch",
     )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"verified":true' in result.stdout
     assert "No registry write was performed." in result.stdout
-    _assert_no_git_mutation(act_checkout, before)
