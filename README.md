@@ -28,10 +28,10 @@ itself. The organizer is trusted to review a normal `admin/*` pull request to
 4. Run `eventctl doctor --event event/binding.json` and copy its complete
    `result.event` object into `registry/state.json.event`. Leave the registry
    in `draft`, disabled, with `bootstrap_required` until the event is ready.
-5. After the reviewed `eventctl/v2` release exists, replace `UNRELEASED` in
-   `tools/eventctl.lock.json` with every release archive and binary SHA-256
-   value. Trusted workflows and the E2E suite download and verify only the
-   platform-specific asset they need.
+5. After the reviewed `eventctl/v2` release exists, copy its
+   `eventctl.lock.json` release asset to `tools/eventctl.lock.json`. Trusted
+   workflows and the E2E suite download and verify only the platform-specific
+   asset they need.
 6. Review the bootstrap PR, create the protected branches, then set the
    registry phase to `registration_open` and enable it through an organizer PR.
 
