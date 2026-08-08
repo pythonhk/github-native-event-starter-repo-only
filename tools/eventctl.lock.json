@@ -1,1 +1,26 @@
-{"repository":"pythonhk/eventctl","version":"UNRELEASED","assets":{}}
+{
+  "assets": {
+    "darwin-amd64": {
+      "archive_sha256": "2699fa0d5fbdfc1eb642438858eb848fc8c89f31be4e44ffebc58f9aa8a84f73",
+      "binary_sha256": "64ab16319570ccfe023e69abe04d4926ac011756e39a0bb9a2af03ed3b6bd480",
+      "name": "eventctl_0.2.0_darwin_amd64.tar.gz"
+    },
+    "darwin-arm64": {
+      "archive_sha256": "1fa60568ce3fa79a608ebfae6997c5f5dd9774b3ba78df43fa6a208d13bad9f8",
+      "binary_sha256": "92d2c897161cc0ba904de000cc6a908ec24d0ff71ec7703de339160e4e7889e7",
+      "name": "eventctl_0.2.0_darwin_arm64.tar.gz"
+    },
+    "linux-amd64": {
+      "archive_sha256": "27a377cbe08e82351d7203aa857a68a04ddbede5dc7715c1d4dfad4801bfae6c",
+      "binary_sha256": "bde111406a40f7f7afeb2689d7152f9fbc89dfbe747df38d29e1f4d5bf7989c3",
+      "name": "eventctl_0.2.0_linux_amd64.tar.gz"
+    },
+    "linux-arm64": {
+      "archive_sha256": "e4fc463a1047df35964588b018d5a1aaa1b940020661fc8b665e3a47fef42587",
+      "binary_sha256": "2ba109d640026f8bdc7c6310c53429936d07645d8225b3ff8b9f4a7a2215cf00",
+      "name": "eventctl_0.2.0_linux_arm64.tar.gz"
+    }
+  },
+  "repository": "pythonhk/eventctl",
+  "version": "0.2.0"
+}
