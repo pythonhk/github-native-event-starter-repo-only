@@ -3,6 +3,8 @@ name: Participant registration validation
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    paths:
+      - requests/users/**
 
 permissions:
   contents: read

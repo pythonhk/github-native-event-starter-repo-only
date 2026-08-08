@@ -3,6 +3,8 @@ name: Submission validation
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    paths:
+      - requests/submissions/**
 
 permissions:
   contents: read
